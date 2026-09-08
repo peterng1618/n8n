@@ -217,6 +217,8 @@ export interface FrontendSettings {
 	};
 	enterprise: IEnterpriseSettings;
 	hideUsagePage: boolean;
+	/** Whether the instance runs on a closed network and must not send data that identifies it to n8n. */
+	closedNetworkMode: boolean;
 	license: {
 		planName?: string;
 		consumerId: string;

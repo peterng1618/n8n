@@ -1,5 +1,6 @@
 import { LicenseState, Logger } from '@n8n/backend-common';
 import { OutboundHttp, type HttpRequestClient, isHttpRequestError } from '@n8n/backend-network';
+import { GlobalConfig } from '@n8n/config';
 import { Time } from '@n8n/constants';
 import type { User } from '@n8n/db';
 import { WorkflowRepository } from '@n8n/db';
@@ -34,12 +35,38 @@ export class LicenseService {
 		private readonly workflowRepository: WorkflowRepository,
 		private readonly urlService: UrlService,
 		private readonly eventService: EventService,
+		private readonly globalConfig: GlobalConfig,
 		outboundHttp: OutboundHttp,
 	) {
 		this.http = outboundHttp.requests({
 			useDefaultSsrfPolicy: 'unsafe', // Fixed, n8n-controlled host
 			timeout: REQUEST_TIMEOUT_MS,
 		});
+	}
+
+	/**
+	 * `enterprise.n8n.io` is hardcoded, so closed-network mode always blocks it.
+	 * Throw instead of hiding the route: an admin with `license:manage` who gets a
+	 * 404 reads it as a routing bug.
+	 */
+	private assertEnterpriseServerAllowed(action: string) {
+		if (this.globalConfig.closedNetworkMode) {
+			throw new BadRequestError(
+				`Cannot ${action} because closed-network mode (N8N_CLOSED_NETWORK_MODE) blocks requests to enterprise.n8n.io.`,
+			);
+		}
+	}
+
+	/**
+	 * Without this, activation and renewal look like they worked: `License` no-ops
+	 * when the SDK was never created, so the caller gets a success with nothing changed.
+	 */
+	private assertLicenseServerAllowed(action: string) {
+		if (this.license.isLicenseServerDisabled()) {
+			throw new BadRequestError(
+				`Cannot ${action} because closed-network mode (N8N_CLOSED_NETWORK_MODE) blocks requests to the license server. Set N8N_LICENSE_SERVER_URL to a host inside your network to use a license.`,
+			);
+		}
 	}
 
 	async getLicenseData() {
@@ -68,6 +95,8 @@ export class LicenseService {
 	}
 
 	async requestEnterpriseTrial(user: User) {
+		this.assertEnterpriseServerAllowed('request an enterprise trial');
+
 		await this.http.request({
 			url: 'https://enterprise.n8n.io/enterprise-trial',
 			method: 'POST',
@@ -95,6 +124,8 @@ export class LicenseService {
 		instanceUrl: string;
 		licenseType: string;
 	}): Promise<{ title: string; text: string }> {
+		this.assertEnterpriseServerAllowed('register the community edition');
+
 		try {
 			const { licenseKey, ...rest } = await this.http.request<{
 				title: string;
@@ -138,6 +169,8 @@ export class LicenseService {
 		eulaUri?: string,
 		userEmail?: string,
 	): Promise<void> {
+		this.assertLicenseServerAllowed('activate a license');
+
 		try {
 			if (eulaUri && userEmail) {
 				await this.license.activate(activationKey, eulaUri, userEmail);
@@ -178,6 +211,12 @@ export class LicenseService {
 	}
 
 	async renewLicense() {
+		// Must come before the Community check below. Under
+		// `N8N_LICENSE_INSECURE_UNLOCK_ALL_FEATURES` the plan reads as `Enterprise`,
+		// so that check no longer stops us, and renewal would report success for a
+		// call that did nothing.
+		this.assertLicenseServerAllowed('renew a license');
+
 		if (this.license.getPlanName() === 'Community') return; // unlicensed, nothing to renew
 
 		try {

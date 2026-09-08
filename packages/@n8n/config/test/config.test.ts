@@ -63,6 +63,7 @@ describe('GlobalConfig', () => {
 		},
 		defaultLocale: 'en',
 		hideUsagePage: false,
+		closedNetworkMode: false,
 		deployment: {
 			type: 'default',
 		},
@@ -523,6 +524,7 @@ describe('GlobalConfig', () => {
 			activationKey: '',
 			tenantId: 1,
 			cert: '',
+			insecureUnlockAllFeatures: false,
 		},
 		security: {
 			restrictFileAccessTo: '~/.n8n-files',

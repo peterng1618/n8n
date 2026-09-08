@@ -62,6 +62,7 @@ export const defaultSettings: FrontendSettings = {
 	isMultiMain: false,
 	executionTimeout: 0,
 	hideUsagePage: false,
+	closedNetworkMode: false,
 	hiringBannerEnabled: false,
 	instanceId: '',
 	license: { environment: 'development', consumerId: 'unknown' },

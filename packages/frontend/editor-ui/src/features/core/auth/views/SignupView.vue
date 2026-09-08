@@ -59,13 +59,19 @@ const FORM_CONFIG: IFormBoxConfig = {
 				capitalize: true,
 			},
 		},
-		{
-			name: 'agree',
-			properties: {
-				label: i18n.baseText('auth.agreement.label'),
-				type: 'checkbox',
-			},
-		},
+		// The consent checkbox asks to send the email to n8n. On a closed network
+		// that never happens, so do not ask.
+		...(settingsStore.isClosedNetworkMode
+			? []
+			: [
+					{
+						name: 'agree',
+						properties: {
+							label: i18n.baseText('auth.agreement.label'),
+							type: 'checkbox' as const,
+						},
+					},
+				]),
 	],
 };
 
@@ -124,7 +130,7 @@ async function onSubmit(values: { [key: string]: string | boolean }) {
 			password: string;
 		});
 
-		if (values.agree === true) {
+		if (values.agree === true && !settingsStore.isClosedNetworkMode) {
 			try {
 				await usersStore.submitContactEmail(values.email.toString(), values.agree);
 			} catch {}

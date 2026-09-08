@@ -481,6 +481,22 @@ export abstract class BaseCommand<F = never> {
 
 	async initLicense(): Promise<void> {
 		this.license = Container.get(License);
+
+		const { closedNetworkMode } = this.globalConfig;
+		const { insecureUnlockAllFeatures } = this.globalConfig.license;
+
+		if (insecureUnlockAllFeatures) {
+			this.logger.warn(
+				'N8N_LICENSE_INSECURE_UNLOCK_ALL_FEATURES IS ENABLED. Every enterprise feature reports as licensed and all quotas are lifted, with no license. This instance reports itself as an Enterprise plan. Use it for local testing only.',
+			);
+		}
+
+		if (closedNetworkMode && !insecureUnlockAllFeatures) {
+			this.logger.info(
+				'Closed-network mode is enabled without N8N_LICENSE_INSECURE_UNLOCK_ALL_FEATURES, so this instance runs on the Community feature set. It cannot get or renew a license offline.',
+			);
+		}
+
 		await this.license.init();
 
 		Container.get(LicenseState).setLicenseProvider(this.license);

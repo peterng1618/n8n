@@ -1,6 +1,7 @@
 import type { LicenseState } from '@n8n/backend-common';
 import { markHttpRequestError } from '@n8n/backend-network';
 import type { HttpRequestClient, OutboundHttp } from '@n8n/backend-network';
+import type { GlobalConfig } from '@n8n/config';
 import type { WorkflowRepository } from '@n8n/db';
 import type { TEntitlement } from '@n8n_io/license-sdk';
 import { AxiosError } from 'axios';
@@ -20,6 +21,9 @@ describe('LicenseService', () => {
 	const request = vi.fn();
 	const requests = vi.fn().mockReturnValue(mock<HttpRequestClient>({ request }));
 	const outboundHttp = mock<OutboundHttp>({ requests });
+	// Set explicitly: an auto-mocked property reads as truthy, which would trip the
+	// closed-network guards in every test below.
+	const globalConfig = mock<GlobalConfig>({ closedNetworkMode: false });
 	const licenseService = new LicenseService(
 		mock(),
 		license,
@@ -27,6 +31,7 @@ describe('LicenseService', () => {
 		workflowRepository,
 		mock(),
 		eventService,
+		globalConfig,
 		outboundHttp,
 	);
 
@@ -202,6 +207,54 @@ describe('LicenseService', () => {
 					licenseType: 'community-registered',
 				}),
 			).rejects.toThrowError('Failed to register community edition');
+			expect(eventService.emit).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('closed-network mode', () => {
+		beforeEach(() => {
+			globalConfig.closedNetworkMode = true;
+			license.isLicenseServerDisabled.mockReturnValue(true);
+		});
+
+		afterEach(() => {
+			globalConfig.closedNetworkMode = false;
+			license.isLicenseServerDisabled.mockReturnValue(false);
+		});
+
+		test('refuses to request an enterprise trial', async () => {
+			await expect(licenseService.requestEnterpriseTrial(mock())).rejects.toThrowError(
+				BadRequestError,
+			);
+			expect(request).not.toHaveBeenCalled();
+		});
+
+		test('refuses to register the community edition', async () => {
+			await expect(
+				licenseService.registerCommunityEdition({
+					userId: '123',
+					email: 'test@ema.il',
+					instanceId: '123',
+					instanceUrl: 'http://localhost',
+					licenseType: 'community-registered',
+				}),
+			).rejects.toThrowError(BadRequestError);
+			expect(request).not.toHaveBeenCalled();
+		});
+
+		test('refuses to activate a license', async () => {
+			await expect(licenseService.activateLicense('key')).rejects.toThrowError(BadRequestError);
+			expect(license.activate).not.toHaveBeenCalled();
+		});
+
+		test('refuses to renew even when the plan reads as Enterprise', async () => {
+			// The unlock flag makes `getPlanName` return `Enterprise`, so the Community
+			// short-circuit no longer fires. Without the guard this would report success
+			// for a renewal that did nothing.
+			license.getPlanName.mockReturnValueOnce('Enterprise');
+
+			await expect(licenseService.renewLicense()).rejects.toThrowError(BadRequestError);
+			expect(license.renew).not.toHaveBeenCalled();
 			expect(eventService.emit).not.toHaveBeenCalled();
 		});
 	});

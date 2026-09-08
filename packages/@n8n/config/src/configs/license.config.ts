@@ -25,4 +25,23 @@ export class LicenseConfig {
 	/** Ephemeral license certificate. See: https://github.com/n8n-io/license-management?tab=readme-ov-file#concept-ephemeral-entitlements */
 	@Env('N8N_LICENSE_CERT')
 	cert: string = '';
+
+	/**
+	 * Report every enterprise feature as licensed and lift all license quotas,
+	 * without a license. The instance reports itself as an `Enterprise` plan.
+	 * For local development and manual feature testing only.
+	 *
+	 * Two features stay off on purpose: `feat:apiDisabled`, because it is
+	 * inverted and turning it on disables the public API, and
+	 * `feat:showNonProdBanner`, because it is a UI marker rather than a
+	 * capability.
+	 *
+	 * This changes only what the license reports. Features that need more
+	 * configuration to work (S3 storage, SSO, the AI services) stay unavailable
+	 * until you configure them.
+	 *
+	 * This is not a license grant.
+	 */
+	@Env('N8N_LICENSE_INSECURE_UNLOCK_ALL_FEATURES')
+	insecureUnlockAllFeatures: boolean = false;
 }

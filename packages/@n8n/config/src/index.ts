@@ -257,6 +257,33 @@ export class GlobalConfig {
 	@Env('N8N_HIDE_USAGE_PAGE')
 	hideUsagePage: boolean = false;
 
+	/**
+	 * Closed-network mode. Stops the instance from sending data that identifies it
+	 * to n8n-operated services, so it can run on a closed network:
+	 *
+	 * - diagnostics and telemetry (Rudderstack and PostHog, backend and frontend)
+	 * - the personalization survey and dynamic banners
+	 * - version and "What's New" checks, which send the instance ID and version
+	 * - the license server, `enterprise.n8n.io`, and the signup onboarding email
+	 *
+	 * This is not a full egress block. Calls that identify nobody still go out:
+	 * the community-node and MCP server catalogs, the package status check, and
+	 * the templates library. Turn those off with `N8N_VERIFIED_PACKAGES_ENABLED`,
+	 * `N8N_DISABLED_MODULES=mcp-registry`, and `N8N_TEMPLATES_ENABLED`.
+	 *
+	 * Destinations that the instance admin chooses are never touched: Sentry,
+	 * OpenTelemetry, log-streaming destinations, external hooks, and the npm
+	 * registry. For the same reason, each n8n endpoint below is only disabled
+	 * when its own environment variable is unset. Point one at a host inside the
+	 * closed network and it keeps working.
+	 *
+	 * The instance cannot get or renew a license while this is on, so it runs on
+	 * the Community feature set unless
+	 * `N8N_LICENSE_INSECURE_UNLOCK_ALL_FEATURES` is also set.
+	 */
+	@Env('N8N_CLOSED_NETWORK_MODE')
+	closedNetworkMode: boolean = false;
+
 	/** Number of reverse proxies n8n is running behind. */
 	@Env('N8N_PROXY_HOPS')
 	proxy_hops: number = 0;
@@ -335,4 +362,84 @@ export class GlobalConfig {
 
 	@Nested
 	activityLog: ActivityLogConfig;
+
+	/**
+	 * Runs once, after every nested config is built, so this is the one place that
+	 * can see the whole config tree at once. Nothing re-runs it, so a field forced
+	 * here can still be changed later at runtime.
+	 */
+	sanitize() {
+		if (!this.closedNetworkMode) return;
+
+		const overridden: string[] = [];
+
+		/**
+		 * Leave an endpoint alone once the admin has pointed it somewhere. A set
+		 * variable means a deliberate choice, and it may well name a host inside
+		 * the closed network. Mirrors `readEnv`, which also accepts `<ENV>_FILE`.
+		 */
+		const isRepointed = (...envNames: string[]) =>
+			envNames.some((name) => name in process.env || `${name}_FILE` in process.env);
+
+		/** Only report a setting as overridden when the admin had set it explicitly. */
+		const force = (isOn: boolean, envName: string, turnOff: () => void) => {
+			if (!isOn) return;
+			if (envName in process.env || `${envName}_FILE` in process.env) overridden.push(envName);
+			turnOff();
+		};
+
+		// Rudderstack and PostHog, backend and frontend. Also unregisters the
+		// `/rest/telemetry` and `/rest/ph` proxies, and switches off MCP-app
+		// telemetry and the personalization survey.
+		if (
+			!isRepointed(
+				'N8N_DIAGNOSTICS_CONFIG_BACKEND',
+				'N8N_DIAGNOSTICS_CONFIG_FRONTEND',
+				'N8N_DIAGNOSTICS_POSTHOG_API_HOST',
+			)
+		) {
+			force(this.diagnostics.enabled, 'N8N_DIAGNOSTICS_ENABLED', () => {
+				this.diagnostics.enabled = false;
+			});
+			force(this.personalization.enabled, 'N8N_PERSONALIZATION_ENABLED', () => {
+				this.personalization.enabled = false;
+			});
+		}
+
+		if (!isRepointed('N8N_DYNAMIC_BANNERS_ENDPOINT')) {
+			force(this.dynamicBanners.enabled, 'N8N_DYNAMIC_BANNERS_ENABLED', () => {
+				this.dynamicBanners.enabled = false;
+			});
+		}
+
+		// Both send the instance ID and version as headers.
+		if (!isRepointed('N8N_VERSION_NOTIFICATIONS_ENDPOINT')) {
+			force(this.versionNotifications.enabled, 'N8N_VERSION_NOTIFICATIONS_ENABLED', () => {
+				this.versionNotifications.enabled = false;
+			});
+		}
+		if (!isRepointed('N8N_VERSION_NOTIFICATIONS_WHATS_NEW_ENDPOINT')) {
+			force(
+				this.versionNotifications.whatsNewEnabled,
+				'N8N_VERSION_NOTIFICATIONS_WHATS_NEW_ENABLED',
+				() => {
+					this.versionNotifications.whatsNewEnabled = false;
+				},
+			);
+		}
+
+		// `License.init` skips the SDK outright, so this only keeps the renewal
+		// loop from being armed.
+		if (!isRepointed('N8N_LICENSE_SERVER_URL')) {
+			force(this.license.autoRenewalEnabled, 'N8N_LICENSE_AUTO_RENEW_ENABLED', () => {
+				this.license.autoRenewalEnabled = false;
+			});
+		}
+
+		if (overridden.length > 0) {
+			console.warn(
+				`N8N_CLOSED_NETWORK_MODE is enabled, so these settings were forced off: ${overridden.join(', ')}. Point the matching endpoint variable at a host inside your network to keep one of them.`,
+			);
+		}
+	}
 }

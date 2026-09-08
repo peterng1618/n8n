@@ -1,6 +1,7 @@
 import type { Logger } from '@n8n/backend-common';
 import { mockLogger } from '@n8n/backend-test-utils';
 import type { GlobalConfig } from '@n8n/config';
+import { LICENSE_FEATURES, LICENSE_QUOTAS, UNLIMITED_LICENSE_QUOTA } from '@n8n/constants';
 import type { SettingsRepository } from '@n8n/db';
 import { LicenseManager } from '@n8n_io/license-sdk';
 import type { InstanceSettings } from 'n8n-core';
@@ -8,6 +9,7 @@ import type { MockedClass } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 
 import { N8N_VERSION } from '@/constants';
+import { EVALUATION_TIER_DEFAULTS } from '@/evaluation.ee/evaluation-concurrency.helper';
 import { License } from '@/license';
 
 vi.mock('@n8n_io/license-sdk');
@@ -30,7 +32,17 @@ const licenseConfig: GlobalConfig['license'] = {
 	activationKey: MOCK_ACTIVATION_KEY,
 	tenantId: 1,
 	cert: '',
+	insecureUnlockAllFeatures: false,
 };
+
+/**
+ * `mock<GlobalConfig>` auto-stubs whatever it is not given, and a stub is truthy.
+ * Left to itself, `closedNetworkMode` would read as on and `init` would skip the
+ * SDK. Default it off; a test that wants it on passes it in.
+ */
+const mockGlobalConfig = (
+	overrides: NonNullable<Parameters<typeof mock<GlobalConfig>>[0]> = {},
+) => mock<GlobalConfig>({ closedNetworkMode: false, ...overrides });
 
 describe('License', () => {
 	let license: License;
@@ -41,7 +53,7 @@ describe('License', () => {
 	});
 
 	beforeEach(async () => {
-		const globalConfig = mock<GlobalConfig>({
+		const globalConfig = mockGlobalConfig({
 			license: licenseConfig,
 			multiMainSetup: { enabled: false },
 		});
@@ -78,7 +90,7 @@ describe('License', () => {
 			mock<InstanceSettings>({ instanceType: 'worker', isLeader: false }),
 			mock(),
 			mock(),
-			mock<GlobalConfig>({ license: licenseConfig }),
+			mockGlobalConfig({ license: licenseConfig }),
 		);
 		await license.init();
 		expect(LicenseManager).toHaveBeenCalledWith(
@@ -267,7 +279,7 @@ describe('License', () => {
 				instanceSettings,
 				mock(),
 				mock(),
-				mock<GlobalConfig>({ license: licenseConfig }),
+				mockGlobalConfig({ license: licenseConfig }),
 			);
 
 			await license.init();
@@ -295,7 +307,7 @@ describe('License', () => {
 			return calls[calls.length - 1][0].deviceFingerprint as () => string;
 		};
 
-		const globalConfig = mock<GlobalConfig>({
+		const globalConfig = mockGlobalConfig({
 			license: licenseConfig,
 			multiMainSetup: { enabled: false },
 		});
@@ -346,7 +358,7 @@ describe('License', () => {
 
 		beforeEach(async () => {
 			vi.restoreAllMocks();
-			const globalConfig = mock<GlobalConfig>({
+			const globalConfig = mockGlobalConfig({
 				license: licenseConfig,
 				multiMainSetup: { enabled: false },
 			});
@@ -405,7 +417,7 @@ describe('License', () => {
 			const settingsRepository = mock<SettingsRepository>();
 			settingsRepository.findOne.mockResolvedValue({ value: 'test-cert-value' } as any);
 
-			const globalConfig = mock<GlobalConfig>({
+			const globalConfig = mockGlobalConfig({
 				license: licenseConfig,
 				multiMainSetup: { enabled: false },
 			});
@@ -429,7 +441,7 @@ describe('License', () => {
 
 	describe('init', () => {
 		it('when leader main with N8N_LICENSE_AUTO_RENEW_ENABLED=true, should enable renewal', async () => {
-			const globalConfig = mock<GlobalConfig>({
+			const globalConfig = mockGlobalConfig({
 				license: { ...licenseConfig, autoRenewalEnabled: true },
 			});
 
@@ -463,7 +475,7 @@ describe('License', () => {
 				autoRenewalEnabled: false,
 			},
 		])('$scenario, should disable renewal', async ({ isLeader, autoRenewalEnabled }) => {
-			const globalConfig = mock<GlobalConfig>({
+			const globalConfig = mockGlobalConfig({
 				license: { ...licenseConfig, autoRenewalEnabled },
 			});
 
@@ -484,7 +496,7 @@ describe('License', () => {
 		});
 
 		it('when CLI command with N8N_LICENSE_AUTO_RENEW_ENABLED=true, should enable renewal', async () => {
-			const globalConfig = mock<GlobalConfig>({
+			const globalConfig = mockGlobalConfig({
 				license: { ...licenseConfig, autoRenewalEnabled: true },
 			});
 
@@ -508,7 +520,7 @@ describe('License', () => {
 
 		beforeEach(async () => {
 			vi.restoreAllMocks();
-			const globalConfig = mock<GlobalConfig>({
+			const globalConfig = mockGlobalConfig({
 				license: licenseConfig,
 				multiMainSetup: { enabled: false },
 			});
@@ -593,7 +605,7 @@ describe('License', () => {
 
 		beforeEach(async () => {
 			vi.restoreAllMocks();
-			const globalConfig = mock<GlobalConfig>({
+			const globalConfig = mockGlobalConfig({
 				license: licenseConfig,
 				multiMainSetup: { enabled: false },
 			});
@@ -680,7 +692,7 @@ describe('License', () => {
 
 		beforeEach(async () => {
 			vi.restoreAllMocks();
-			const globalConfig = mock<GlobalConfig>({
+			const globalConfig = mockGlobalConfig({
 				license: licenseConfig,
 				multiMainSetup: { enabled: false },
 			});
@@ -711,5 +723,164 @@ describe('License', () => {
 			expect(expiringDays).toBe(3); // ceiling of 2.3
 			expect(terminatingDays).toBe(6); // ceiling of 5.7
 		});
+	});
+});
+
+describe('License with N8N_LICENSE_INSECURE_UNLOCK_ALL_FEATURES', () => {
+	const instanceSettings = mock<InstanceSettings>({
+		instanceId: MOCK_INSTANCE_ID,
+		instanceType: 'main',
+		isLeader: true,
+	});
+
+	/** Deliberately does not call `init()`: the unlock must not need the SDK. */
+	const makeLicense = (overrides: Partial<GlobalConfig> = {}) =>
+		new License(
+			mockLogger(),
+			instanceSettings,
+			mock(),
+			mock(),
+			mockGlobalConfig({
+				license: { ...licenseConfig, insecureUnlockAllFeatures: true },
+				multiMainSetup: { enabled: false },
+				...overrides,
+			}),
+		);
+
+	test('reports every feature as licensed except the two excluded ones', () => {
+		const license = makeLicense();
+
+		for (const feature of Object.values(LICENSE_FEATURES)) {
+			const expected =
+				feature !== LICENSE_FEATURES.API_DISABLED &&
+				feature !== LICENSE_FEATURES.SHOW_NON_PROD_BANNER;
+
+			expect(license.isLicensed(feature)).toBe(expected);
+		}
+	});
+
+	test('keeps the public API on and shows no non-production banner', () => {
+		const license = makeLicense();
+
+		// `isAPIDisabled` is inverted: leaving it false is what keeps the API up.
+		expect(license.isAPIDisabled()).toBe(false);
+		expect(license.isLicensed(LICENSE_FEATURES.SHOW_NON_PROD_BANNER)).toBe(false);
+	});
+
+	test('reports a plan name that the evaluation tier map recognizes', () => {
+		const license = makeLicense();
+
+		expect(license.getPlanName()).toBe('Enterprise');
+		expect(license.getValue('planName')).toBe('Enterprise');
+		// An unrecognized name silently resolves to a concurrency of 1.
+		expect(Object.keys(EVALUATION_TIER_DEFAULTS)).toContain(license.getPlanName());
+	});
+
+	test('lifts the quotas that have a defined unlimited sentinel', () => {
+		const license = makeLicense();
+
+		expect(license.getValue(LICENSE_QUOTAS.USERS_LIMIT)).toBe(UNLIMITED_LICENSE_QUOTA);
+		expect(license.getValue(LICENSE_QUOTAS.TRIGGER_LIMIT)).toBe(UNLIMITED_LICENSE_QUOTA);
+		expect(license.getValue(LICENSE_QUOTAS.VARIABLES_LIMIT)).toBe(UNLIMITED_LICENSE_QUOTA);
+		expect(license.getValue(LICENSE_QUOTAS.TEAM_PROJECT_LIMIT)).toBe(UNLIMITED_LICENSE_QUOTA);
+		expect(license.getValue(LICENSE_QUOTAS.EVALUATION_CONCURRENCY_LIMIT)).toBe(
+			UNLIMITED_LICENSE_QUOTA,
+		);
+
+		expect(license.getUsersLimit()).toBe(UNLIMITED_LICENSE_QUOTA);
+		expect(license.getTeamProjectLimit()).toBe(UNLIMITED_LICENSE_QUOTA);
+		expect(license.getWorkflowHistoryPruneLimit()).toBe(UNLIMITED_LICENSE_QUOTA);
+		expect(license.isWithinUsersLimit()).toBe(true);
+	});
+
+	test('leaves remotely metered counters alone', () => {
+		const license = makeLicense();
+
+		// A fabricated balance is refused by the gateway and renders as "-1 credits".
+		expect(license.getValue(LICENSE_QUOTAS.AI_CREDITS)).toBeUndefined();
+		expect(license.getValue(LICENSE_QUOTAS.INSIGHTS_RETENTION_MAX_AGE_DAYS)).toBeUndefined();
+	});
+
+	test('changes nothing when the flag is off', () => {
+		const license = new License(
+			mockLogger(),
+			instanceSettings,
+			mock(),
+			mock(),
+			mockGlobalConfig({ license: licenseConfig, multiMainSetup: { enabled: false } }),
+		);
+
+		expect(license.isLicensed(MOCK_FEATURE_FLAG)).toBe(false);
+		expect(license.getPlanName()).toBe('Community');
+		expect(license.getValue(LICENSE_QUOTAS.USERS_LIMIT)).toBeUndefined();
+	});
+});
+
+describe('License with N8N_CLOSED_NETWORK_MODE', () => {
+	const instanceSettings = mock<InstanceSettings>({
+		instanceId: MOCK_INSTANCE_ID,
+		instanceType: 'main',
+		isLeader: true,
+	});
+
+	const makeLicense = (licenseOverrides: Partial<GlobalConfig['license']> = {}) =>
+		new License(
+			mockLogger(),
+			instanceSettings,
+			mock(),
+			mock(),
+			mockGlobalConfig({
+				closedNetworkMode: true,
+				license: { ...licenseConfig, ...licenseOverrides },
+				multiMainSetup: { enabled: false },
+			}),
+		);
+
+	beforeEach(() => {
+		vi.mocked(LicenseManager).mockClear();
+		vi.unstubAllEnvs();
+	});
+
+	test('never constructs the license manager', async () => {
+		const license = makeLicense();
+
+		await license.init();
+
+		expect(LicenseManager).not.toHaveBeenCalled();
+		expect(license.isLicenseServerDisabled()).toBe(true);
+	});
+
+	test('contacts a license server the admin pointed at their own network', async () => {
+		vi.stubEnv('N8N_LICENSE_SERVER_URL', 'https://license.corp.internal/v1');
+
+		const license = makeLicense();
+
+		await license.init();
+
+		expect(LicenseManager).toHaveBeenCalled();
+		expect(license.isLicenseServerDisabled()).toBe(false);
+	});
+
+	test('still reports Enterprise when the unlock flag is also set', async () => {
+		const license = makeLicense({ insecureUnlockAllFeatures: true });
+
+		await license.init();
+
+		// The whole point: the unlock does not depend on the SDK existing.
+		expect(LicenseManager).not.toHaveBeenCalled();
+		expect(license.isLicensed(MOCK_FEATURE_FLAG)).toBe(true);
+		expect(license.isLicensed('feat:sourceControl')).toBe(true);
+		expect(license.getPlanName()).toBe('Enterprise');
+		expect(license.getUsersLimit()).toBe(UNLIMITED_LICENSE_QUOTA);
+		expect(license.isAPIDisabled()).toBe(false);
+	});
+
+	test('falls back to Community without the unlock flag', async () => {
+		const license = makeLicense();
+
+		await license.init();
+
+		expect(license.isLicensed(MOCK_FEATURE_FLAG)).toBe(false);
+		expect(license.getPlanName()).toBe('Community');
 	});
 });

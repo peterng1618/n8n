@@ -188,6 +188,16 @@ export class InstanceRiskReporter implements RiskReporter {
 	}
 
 	private async getOutdatedState() {
+		// This call sends the instance ID, and it ignores
+		// N8N_VERSION_NOTIFICATIONS_ENABLED, so closed-network mode has to stop it
+		// here. An admin who pointed the endpoint at their own host keeps it.
+		if (
+			this.globalConfig.closedNetworkMode &&
+			!('N8N_VERSION_NOTIFICATIONS_ENDPOINT' in process.env)
+		) {
+			return null;
+		}
+
 		let versions = [];
 
 		const localVersion = N8N_VERSION;

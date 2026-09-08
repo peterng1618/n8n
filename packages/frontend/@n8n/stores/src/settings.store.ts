@@ -110,6 +110,8 @@ export const useSettingsStore = defineStore(STORES.SETTINGS, () => {
 
 	const isE2ETestMode = computed(() => settings.value.inE2ETests);
 
+	const isClosedNetworkMode = computed(() => settings.value.closedNetworkMode ?? false);
+
 	const isCanvasOnly = computed(() => settings.value.canvasOnly);
 
 	const isCrdtCollaborationEnabled = computed(
@@ -481,6 +483,7 @@ export const useSettingsStore = defineStore(STORES.SETTINGS, () => {
 		isSwaggerUIEnabled,
 		isPreviewMode,
 		isE2ETestMode,
+		isClosedNetworkMode,
 		isCanvasOnly,
 		isCrdtCollaborationEnabled,
 		publicApiLatestVersion,

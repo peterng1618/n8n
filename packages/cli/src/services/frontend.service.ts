@@ -363,6 +363,7 @@ export class FrontendService {
 				enforced: false,
 			},
 			hideUsagePage: this.globalConfig.hideUsagePage,
+			closedNetworkMode: this.globalConfig.closedNetworkMode,
 			license: {
 				consumerId: 'unknown',
 				environment: this.globalConfig.license.tenantId === 1 ? 'production' : 'staging',

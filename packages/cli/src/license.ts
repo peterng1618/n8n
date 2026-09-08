@@ -27,6 +27,41 @@ const LICENSE_RENEWAL_DISABLED_WARNING =
 /** The license server rejects device fingerprints shorter than this. */
 const MIN_DEVICE_FINGERPRINT_LENGTH = 32;
 
+/**
+ * Features that `insecureUnlockAllFeatures` deliberately leaves off.
+ * `API_DISABLED` is inverted — reporting it as licensed disables the public API.
+ * `SHOW_NON_PROD_BANNER` is a UI marker, not a capability.
+ */
+const UNLOCK_ALL_EXCLUDED_FEATURES = new Set<BooleanLicenseFeature>([
+	LICENSE_FEATURES.API_DISABLED,
+	LICENSE_FEATURES.SHOW_NON_PROD_BANNER,
+]);
+
+/**
+ * Quota values reported under `insecureUnlockAllFeatures`. Only quotas where a
+ * sentinel has a defined meaning at a consumer are listed. Everything else falls
+ * through to the manager, so each caller applies its own default:
+ * - `aiCredits` / `aiGatewayBudget` are counters metered by n8n's servers, and a
+ *   made-up balance is rejected on first use and renders as "-1 credits" in the UI.
+ * - The insights retention day-counts have no reader that understands `-1`.
+ */
+const UNLOCK_ALL_QUOTAS: Partial<Record<NumericLicenseFeature, number>> = {
+	[LICENSE_QUOTAS.USERS_LIMIT]: UNLIMITED_LICENSE_QUOTA,
+	[LICENSE_QUOTAS.TRIGGER_LIMIT]: UNLIMITED_LICENSE_QUOTA,
+	[LICENSE_QUOTAS.VARIABLES_LIMIT]: UNLIMITED_LICENSE_QUOTA,
+	[LICENSE_QUOTAS.WORKFLOW_HISTORY_PRUNE_LIMIT]: UNLIMITED_LICENSE_QUOTA,
+	[LICENSE_QUOTAS.TEAM_PROJECT_LIMIT]: UNLIMITED_LICENSE_QUOTA,
+	[LICENSE_QUOTAS.INSIGHTS_MAX_HISTORY_DAYS]: UNLIMITED_LICENSE_QUOTA,
+	[LICENSE_QUOTAS.WORKFLOWS_WITH_EVALUATION_LIMIT]: UNLIMITED_LICENSE_QUOTA,
+	[LICENSE_QUOTAS.EVALUATION_CONCURRENCY_LIMIT]: UNLIMITED_LICENSE_QUOTA,
+};
+
+/**
+ * Must stay one of the tiers in `EVALUATION_TIER_DEFAULTS`. An unrecognized plan
+ * name silently resolves to an evaluation concurrency of 1.
+ */
+const UNLOCK_ALL_PLAN_NAME = 'Enterprise';
+
 export type FeatureReturnType = Partial<
 	{
 		planName: string;
@@ -55,6 +90,24 @@ export class License implements LicenseProvider {
 		this.logger = this.logger.scoped('license');
 	}
 
+	private get unlockAllFeatures() {
+		return this.globalConfig.license.insecureUnlockAllFeatures;
+	}
+
+	/**
+	 * Whether the license server is off limits. True in closed-network mode, unless
+	 * the admin pointed `N8N_LICENSE_SERVER_URL` at a host inside their own network.
+	 * Accepts the `_FILE` form too, the same way config reads environment variables.
+	 */
+	isLicenseServerDisabled(): boolean {
+		if (!this.globalConfig.closedNetworkMode) return false;
+
+		const isRepointed =
+			'N8N_LICENSE_SERVER_URL' in process.env || 'N8N_LICENSE_SERVER_URL_FILE' in process.env;
+
+		return !isRepointed;
+	}
+
 	async init({
 		forceRecreate = false,
 		isCli = false,
@@ -65,6 +118,18 @@ export class License implements LicenseProvider {
 		}
 		if (this.isShuttingDown) {
 			this.logger.warn('License manager already shutting down');
+			return;
+		}
+
+		// Skip the SDK outright rather than rely on `offlineMode` or disabled
+		// auto-renewal: `initialize()` contacts the server regardless, and the SDK
+		// is a closed-source dependency, so its network behaviour cannot be
+		// verified from here. Leaving `manager` unset makes every accessor fall
+		// back to its Community value.
+		if (this.isLicenseServerDisabled()) {
+			this.logger.warn(
+				'Closed-network mode is enabled, so the license server will not be contacted. Licensed features are unavailable, and N8N_LICENSE_CERT and N8N_LICENSE_ACTIVATION_KEY have no effect.',
+			);
 			return;
 		}
 
@@ -278,6 +343,7 @@ export class License implements LicenseProvider {
 	}
 
 	isLicensed(feature: BooleanLicenseFeature) {
+		if (this.unlockAllFeatures && !UNLOCK_ALL_EXCLUDED_FEATURES.has(feature)) return true;
 		return this.manager?.hasFeatureEnabled(feature) ?? false;
 	}
 
@@ -409,6 +475,14 @@ export class License implements LicenseProvider {
 	}
 
 	getValue<T extends keyof FeatureReturnType>(feature: T): FeatureReturnType[T] {
+		if (this.unlockAllFeatures) {
+			// `getPlanName` reads through here, so this covers it too.
+			if (feature === 'planName') return UNLOCK_ALL_PLAN_NAME as FeatureReturnType[T];
+
+			const quota = UNLOCK_ALL_QUOTAS[feature as NumericLicenseFeature];
+			if (quota !== undefined) return quota as FeatureReturnType[T];
+		}
+
 		return this.manager?.getFeatureValue(feature) as FeatureReturnType[T];
 	}
 
